@@ -1,0 +1,232 @@
+---
+title: "APTP Data Cleaning"
+author: "Cat"
+date: "12/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(readxl)
+setwd("~/Documents/Fall Data Science/R Code/APTP Project")
+```
+
+
+```{r}
+opd_data_raw <- read_csv("OPD_PublicCallData_2019.csv")
+matt_mapping <- read_csv("Analysis of OPD Calls for Service Data - Matt's Coding.csv")
+opd_grouped <- read_excel("Oakland Call Data Grouping by Description.xlsx")
+
+```
+
+```{r}
+
+opd_data_raw %>% 
+  group_by(Description) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(perc)) -> unique_desc
+
+```
+
+
+
+```{r}
+opd_data_raw %>% 
+  group_by(Description, Source) %>% 
+  summarize(count = n()) %>% 
+  pivot_wider(names_from = Source,
+             values_from = count) -> desc_by_source
+  
+```
+
+
+
+
+Here is where I merged my unique descriptions data source onto mapping APTP had already done to try to roll up some of these categories. I pushed myself here to try to do something I feel very comfortable with in Excel (VLOOKUP) in R instead.
+
+```{r}
+unique_desc %>% 
+  left_join(matt_mapping, c("Description" = "Descriptions")) %>% 
+  select("Description", "count", "perc", "Mapping") -> unique_desc
+```
+
+
+```{r}
+
+unique_desc %>% 
+  left_join(matt_mapping, c("Mapping" = "X11"), na_matches = "never") %>% 
+  select("Description", "count", "perc", "Mapping", "X14") -> unique_desc
+
+```
+
+```{r}
+
+unique_desc %>% 
+  left_join(desc_by_source, "Description", na_matches = "never") %>% 
+  select("Description", "count", "perc", "Mapping", "X14", "911 CALL", "DEFAULT - PHONE INIT", "FIELD INITIATED BY D", "MDT-INITIATED", "ALARM") -> unique_desc
+
+```
+
+```{r}
+unique_desc %>% 
+  rename("Easily Defunded" = X14,
+         "Overall Count" = count,
+         "Percent of Total" = perc,
+         "Grouping" = Mapping) -> unique_desc
+```
+
+
+```{r}
+write.csv(unique_desc,"unique_desc.csv", row.names = FALSE)
+
+
+```
+
+```{r}
+opd_data_raw  %>% 
+  mutate(response_time = `Arrival Time` - `Transmit Time`) -> opd_data_new
+
+```
+
+```{r}
+opd_data_new$response_time <- hms::as.hms(opd_data_new$response_time)
+```
+
+There is an issue here where this join is creating duplicates, I would love to figure this out in the merge but for now I'm just going to dedup separately
+
+```{r}
+opd_data_new %>% 
+  left_join(opd_grouped, "Description", na_matches = "never") %>% 
+  select(Code:response_time, Grouping) -> opd_data_grouping
+
+distinct(opd_data_grouping) -> opd_data_grouping
+
+
+```
+
+
+```{r}
+opd_data_grouping %>% 
+  group_by(Source) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 2))
+
+```
+
+```{r}
+
+opd_data_grouping %>% 
+  filter(Source == '911 CALL') %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+
+opd_data_grouping %>% 
+  filter(Source == 'DEFAULT - PHONE INIT') %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+opd_data_grouping %>% 
+  filter(Source %in% c('FIELD INITIATED BY D', 'MDT-INITIATED')) %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+```
+
+
+```{r}
+
+opd_data_grouping %>% 
+  filter(Source == "911 CALL") %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 2)) %>% 
+  arrange(desc(count))
+
+
+opd_data_grouping %>% 
+  filter(Source == "DEFAULT - PHONE INIT") %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 2)) %>% 
+  arrange(desc(count))
+
+
+
+
+
+```
+
+
+```{r}
+
+
+opd_data_grouping %>% 
+  filter(Source == "911 CALL") %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 5)) %>% 
+  filter(Grouping != "Misdial or Hang Up" & Grouping != "Internal Police Call" ) %>% 
+  filter(perc >= .0025 | Grouping == "Assault" | Grouping == "Sexual Assault") %>% 
+  ggplot(aes(x = count, y = reorder(Grouping, count))) +
+    geom_bar(stat = "identity")
+  
+
+```
+
+
+
+
+
+Average response times for 911 calls
+
+
+```{r}
+opd_data_grouping %>% 
+  filter(Source == "911 CALL", Priority %in% c(0, 1, 2)) %>% 
+  group_by(Grouping) %>% 
+  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
+            count = n()) %>% 
+  filter(count >= 5) %>% 
+  arrange(Mean_Response)
+
+
+```
+
+```{r}
+opd_data_grouping %>% 
+  filter(Source == "911 CALL", Priority %in% c(0, 1, 2, 3, 4)) %>% 
+  group_by(Beat) %>% 
+  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
+            count = n()) %>% 
+  arrange(desc(Mean_Response))
+```
+
+```{r}
+opd_data_grouping %>% 
+  filter(Source == "911 CALL") %>% 
+  group_by(Priority) %>% 
+  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
+            count = n()) %>% 
+  arrange(Mean_Response)
+```
+```{r}
+
+opd_data_grouping %>% 
+  filter(Source == "911 CALL", Priority %in% c(0, 1, 2, 3, 4)) %>% 
+  group_by(Beat) %>% 
+  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
+            count = n()) %>% 
+  arrange(desc(Mean_Response))
+
+
+```
+
