@@ -1,0 +1,326 @@
+---
+title: "APTP Clean"
+author: "Cat"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(tidyverse)
+library(lubridate)
+library(readxl)
+library(sf)
+library(estimatr)
+library(ggthemes)
+library(hrbrthemes)
+
+
+setwd("~/Documents/Fall Data Science/R Code/APTP-Project")
+
+
+opd_data_raw <- read_csv("OPD_PublicCallData_2019.csv")
+opd_grouped <- read_excel("Oakland Call Data Grouping by Description.xlsx")
+shape1.sf <- st_read("geo_export_003c8e85-82f8-4ef8-aec4-227e86a03525.shp")
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r response times}
+
+opd_data_raw  %>% 
+  mutate(response_time = `Arrival Time` - `Transmit Time`) -> opd_data_new
+
+opd_data_new %>% 
+   mutate(response_time_hms = hms::as.hms(response_time)) -> opd_data_new
+
+opd_data_new %>% 
+  mutate(response_time_minutes = hour(response_time_hms)*60 + minute(response_time_hms) + 1) -> opd_data_new
+
+
+```
+
+
+There is an issue here where this join is creating duplicates, I would love to figure this out in the merge but for now I'm just going to dedup separately
+
+```{r merging on grouping}
+
+opd_data_new %>% 
+  left_join(opd_grouped, "Description", na_matches = "never") %>% 
+  select(Code:response_time, Grouping, 'Violent Crime' ) -> opd_data_new
+
+
+distinct(opd_data_new) -> opd_data_new
+```
+```{r}
+
+```
+
+
+```{r dispatched calls}
+
+opd_data_new %>% 
+   mutate(dispatched = !is.na(`Dispatch Time`)) -> opd_data_new
+```
+
+```{r num calls by source and by grouping}
+opd_data_new %>% 
+  group_by(Source) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+
+opd_data_new %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+```
+
+To work on later - there are some calls here that are missing Grouping that I excluded - I should go back and get them later. I also want to better investigate whether my assumptions about whether police (versus someone else) were dispatched are correct.
+
+```{r overall police activity perc violent crime}
+
+opd_data_new %>% 
+  filter(!is.na(Grouping), dispatched = TRUE) %>% 
+  group_by(`Violent Crime`) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count)) -> pie_chart_perc_violent_crime
+
+
+fig2 <- plot_ly(pie_chart_perc_violent_crime, labels = ~`Violent Crime`, values = ~percent, type = 'pie')
+fig2 <- fig %>% layout(title = 'Police Activity Related to Violent or Serious Crime',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+
+fig2
+```
+
+
+```{r call types by source}
+
+opd_data_new %>% 
+  filter(Source == '911 CALL') %>% 
+  group_by(Grouping, `Violent Crime`) %>% 
+  summarize(count = n()) %>% 
+  ungroup() %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+
+opd_data_new %>% 
+  filter(Source == 'DEFAULT - PHONE INIT') %>% 
+  group_by(Grouping, `Violent Crime`) %>% 
+  summarize(count = n()) %>% 
+  ungroup() %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+opd_data_new %>% 
+  filter(Source %in% c('FIELD INITIATED BY D', 'MDT-INITIATED')) %>% 
+  group_by(Grouping, `Violent Crime`) %>% 
+  summarize(count = n()) %>% 
+  ungroup() %>% 
+  mutate(perc = round(count/sum(count), digits = 4)) %>% 
+  arrange(desc(count))
+
+```
+
+```{r visualize 911 calls}
+
+opd_data_new %>%
+  filter(Source == "911 CALL") %>% 
+  filter(!is.na(Grouping), !is.na(`Violent Crime`)) %>% 
+  group_by(Grouping, `Violent Crime`) %>% 
+  summarize(count = n())  %>% 
+  ungroup() %>% 
+  mutate(percent = count/sum(count)*100) -> nine91_calls
+
+
+nine91_calls %>%
+  filter(!is.na(Grouping), !is.na(`Violent Crime`), percent >= .2) %>% 
+  ggplot(aes(x = percent, y = reorder(Grouping, percent), fill = `Violent Crime`)) +
+    geom_bar(stat = "identity") +
+    theme_ipsum()+
+    labs(title = "Oakland 2019 911 Calls by Type", caption = '2019 OPD Call Data, N = 442,839') 
+
+```
+```{r violent crime pie chart}
+library(plotly)
+
+
+fig <- plot_ly(nine91_calls, labels = ~`Violent Crime`, values = ~percent, type = 'pie')
+fig <- fig %>% layout(title = '911 Calls Related to Violent or Serious Crime',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+
+fig
+```
+
+
+```{r visualize all calls}
+
+opd_data_new %>%
+  group_by(Grouping, `Violent Crime`) %>% 
+  summarize(count = n())  %>% 
+  filter(count >= 200, !is.na(Grouping)) %>% 
+  ggplot(aes(x = count, y = reorder(Grouping, count), fill = `Violent Crime`)) +
+    geom_bar(stat = "identity") +
+    theme_ipsum()
+
+
+
+```
+
+```{r average response times for 911 calls}
+
+opd_data_new %>% 
+  filter(Source == "911 CALL", !is.na(response_time_minutes)) %>% 
+  group_by(Grouping) %>% 
+  summarize(mean_response = mean(response_time_minutes),
+            count = n()) %>% 
+  arrange(mean_response)
+
+```
+
+
+```{r average response times for 911 calls by beat}
+library(RColorBrewer)
+
+opd_data_new %>% 
+  filter(Source == "911 CALL", !is.na(response_time_minutes)) %>% 
+  group_by(Beat) %>% 
+  summarize(mean_response = mean(response_time_minutes),
+            count = n()) %>% 
+  arrange(mean_response) -> mean_response_beat
+
+
+opd_data_new %>% 
+  filter(Source == "911 CALL", !is.na(response_time_minutes)) %>% 
+  group_by(Beat) %>% 
+  summarize(mean_response = mean(response_time_minutes),
+            count = n()) -> scatter_plot
+
+opd_data_new %>% 
+  filter(Source == "911 CALL", !is.na(response_time_minutes)) %>% 
+  group_by(Beat) %>% 
+  summarize(mean_response = mean(response_time_minutes),
+            count = n()) %>% 
+  ggplot(aes(x = Beat, y = mean_response, size = count, color = mean_response)) +
+  geom_point()  +
+  theme_ipsum() +
+     theme(axis.text.x = element_text(angle = 90))+
+    labs(title = "Response Time by Beat", subtitle = 'Higher Numbered Beat Run Farther East', caption = '2019 OPD Call Data') 
+    theme(plot.caption=element_text(face="italic")) +
+    theme(axis.title.y=element_blank()) +
+    theme(axis.title.x=element_blank()) +
+    labs(fill = "Time in Mins") 
+
+
+```
+
+
+```{r average response times for 911 calls by beat in plotly}
+
+
+
+fig <- plot_ly(data = scatter_plot, type = "scatter", x = ~Beat, y = ~mean_response, size = ~count, color = ~mean_response)
+
+fig %>% 
+  scale_colour_brewer(palette = "Reds") -> fig
+
+fig
+```
+
+
+```{r average response times for 911 calls by beat for violent crimes}
+
+
+opd_data_new %>% 
+  filter(Source == "911 CALL", !is.na(response_time_minutes), `Violent Crime` = TRUE) %>% 
+  group_by(Beat) %>% 
+  summarize(mean_response = mean(response_time_minutes),
+            count = n()) %>% 
+  arrange(mean_response)
+
+
+
+
+opd_data_new %>% 
+  filter(Source == "911 CALL", !is.na(response_time_minutes), `Violent Crime` = TRUE) %>% 
+  group_by(Beat) %>% 
+  summarize(mean_response = mean(response_time_minutes),
+            count = n()) %>% 
+  ggplot(aes(x = Beat, y = mean_response, size = count, color = desc(mean_response))) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 90))  +
+  theme_ipsum() 
+
+```
+
+```{r cleaning data for merge}
+
+shape1.sf %>% 
+  left_join(mean_response_beat, c("name" = "Beat"), na_matches = "never") %>% 
+  select_all() -> shape_response.sf
+
+
+```
+
+
+```{r mapping response times by beat}
+
+
+theme_map <- function(base_size=9, base_family="") {
+    require(grid)
+    theme_bw(base_size=base_size, base_family=base_family) %+replace%
+        theme(axis.line=element_blank(),
+              axis.text=element_blank(),
+              axis.ticks=element_blank(),
+              axis.title=element_blank(),
+              panel.background=element_blank(),
+              panel.border=element_blank(),
+              panel.grid=element_blank(),
+              panel.spacing=unit(0, "lines"),
+              plot.background=element_blank(),
+              legend.justification = c(0,0),
+              legend.position = c(0,0)
+              )
+}
+
+shape_response.sf %>% 
+  ggplot(aes(fill = mean_response)) + 
+  geom_sf() + 
+  coord_sf() +
+  theme_map()   +
+    labs(title = "Average 911 Response Time by Beat", caption = '2019 OPD Call Data') +
+    theme(plot.caption=element_text(face="italic")) +
+    labs(fill = "Time in Mins")+
+    scale_fill_gradient(low = "white", high = "firebrick") 
+
+```
+
+```{r regression}
+
+
+lmout <- lm_robust(response_time ~ Beat + factor(Priority), data = opd_data_new)
+summary(lmout)
+
+lmout2 <- lm_robust(response_time ~ Beat + Grouping + factor(Priority), data = opd_data_new)
+summary(lmout2)
+
+lmout3 <- lm_robust(response_time ~ Beat + Grouping, data = opd_data_new)
+summary(lmout3)
+
+
+```
+
