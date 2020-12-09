@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(lubridate)
 library(readxl)
-setwd("~/Documents/Fall Data Science/R Code/APTP Project")
+setwd("~/Documents/Fall Data Science/R Code/APTP-Project")
 ```
 
 
@@ -178,6 +178,15 @@ opd_data_grouping %>%
   filter(perc >= .0025 | Grouping == "Assault" | Grouping == "Sexual Assault") %>% 
   ggplot(aes(x = count, y = reorder(Grouping, count))) +
     geom_bar(stat = "identity")
+
+
+opd_data_grouping %>% 
+  filter(Source == "911 CALL") %>% 
+  group_by(Grouping) %>% 
+  summarize(count = n()) %>% 
+  mutate(perc = round(count/sum(count), digits = 5))
+
+
   
 
 ```
@@ -196,7 +205,7 @@ opd_data_grouping %>%
   summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
             count = n()) %>% 
   filter(count >= 5) %>% 
-  arrange(Mean_Response)
+  arrange(Mean_Response) -> mean_response_grouping
 
 
 ```
@@ -205,12 +214,34 @@ opd_data_grouping %>%
 opd_data_grouping %>% 
   filter(Source == "911 CALL", Priority %in% c(0, 1, 2, 3, 4)) %>% 
   group_by(Beat) %>% 
-  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
+  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE)),
             count = n()) %>% 
-  arrange(desc(Mean_Response))
+  arrange(desc(Mean_Response)) -> mean_response_beat
+
+
+opd_data_grouping %>% 
+  filter(Source == "911 CALL", Priority %in% c(0, 1, 2, 3, 4)) %>% 
+  group_by(Beat) %>% 
+  summarize(Mean_Response = mean(minute(response_time), na.rm = TRUE),
+            count = n()) %>% 
+  arrange(desc(Mean_Response)) 
+
+opd_data_grouping %>% 
+  min = hour(response_time)*60 + minute(response_time)
+
+opd_data_grouping$response_time <- as.duration(opd_data_grouping$response_time) 
+
 ```
 
 ```{r}
+opd_data_grouping %>% 
+  filter(Source == "911 CALL") %>% 
+  group_by(Priority) %>% 
+  summarize(Mean_Response = hms::as.hms(mean(response_time, na.rm = TRUE,)),
+            count = n()) %>% 
+  arrange(Mean_Response)
+
+
 opd_data_grouping %>% 
   filter(Source == "911 CALL") %>% 
   group_by(Priority) %>% 
@@ -228,5 +259,109 @@ opd_data_grouping %>%
   arrange(desc(Mean_Response))
 
 
+opd_data_grouping$response_time <- hms::as.hms(opd_data_grouping$response_time)
+
+
+opd_data_grouping %>% 
+  filter(Source == "911 CALL", Grouping == "Assault") %>% 
+  group_by(Beat) %>% 
+  summarize(Mean_Response = mean(minute(response_time), na.rm = TRUE),
+            count = n()) %>% 
+  arrange(desc(Mean_Response))
+
+
+
 ```
+
+```{r}
+
+
+opd_data_grouping %>% 
+  mutate(response_time_minutes = hour(response_time)*60 + minute(response_time) + 1) -> opd_data_grouping
+
+
+opd_data_grouping %>% 
+  group_by(Beat, Grouping) %>% 
+  summarize(Mean_Response = mean(dminutes(response_time), na.rm = TRUE),
+            count = n()) %>% 
+  arrange(desc(Mean_Response))  
+
+
+
+
+```
+
+```{r}
+install.packages("sf")
+library(sf)
+
+shape1.sf <- st_read("geo_export_003c8e85-82f8-4ef8-aec4-227e86a03525.shp")
+
+
+
+shape1.sf %>% 
+  left_join(mean_response_beat, c("cp_beat" = "Beat"), na_matches = "never") %>% 
+  select_all() -> shape_response.sf
+
+
+theme_map <- function(base_size=9, base_family="") {
+    require(grid)
+    theme_bw(base_size=base_size, base_family=base_family) %+replace%
+        theme(axis.line=element_blank(),
+              axis.text=element_blank(),
+              axis.ticks=element_blank(),
+              axis.title=element_blank(),
+              panel.background=element_blank(),
+              panel.border=element_blank(),
+              panel.grid=element_blank(),
+              panel.spacing=unit(0, "lines"),
+              plot.background=element_blank(),
+              legend.justification = c(0,0),
+              legend.position = c(0,0)
+              )
+}
+
+
+
+
+shape_response.sf %>% 
+  mutate(Mean_Response_Minutes = hour(Mean_Response)*60 + minute(Mean_Response)) -> shape_response.sf
+
+#okay there is an issue where the codes for a couple of things arent mapping, but we can figure this out!
+
+shape_response.sf %>% 
+  ggplot(aes(fill = desc(Mean_Response_Minutes))) + 
+  geom_sf() + 
+  coord_sf() +
+  theme_map()  
+
+
+
+
+```
+
+```{r}
+library(estimatr)
+
+lmout <- lm_robust(response_time_minutes ~ Beat + factor(Priority), data = opd_data_grouping)
+summary(lmout)
+
+lmout2 <- lm_robust(response_time_minutes ~ Beat + Grouping + factor(Priority), data = opd_data_grouping)
+
+lmout3 <- lm_robust(response_time_minutes ~ Beat + Grouping, data = opd_data_grouping)
+summary(lmout3)
+
+
+lmout2
+
+opd_data_grouping %>% 
+  group_by(Beat) %>% 
+  mutate(Mean_Response = mean(response_time_minutes, na.rm = TRUE)) %>% 
+  ggplot() +
+  geom_point(aes(x = Beat, y = Mean_Response)) +
+  theme(axis.text.x = element_text(angle = 90))
+
+
+```
+
 
